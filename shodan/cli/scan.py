@@ -17,6 +17,35 @@ def scan():
     pass
 
 
+@scan.command(name='list')
+def scan_list():
+    """Show recently launched scans"""
+    key = get_api_key()
+
+    # Get the list
+    api = shodan.Shodan(key)
+    try:
+        scans = api.scans()
+    except shodan.APIError as e:
+        raise click.ClickException(e.value)
+
+    if len(scans) > 0:
+        click.echo(u'# {} Scans Total - Showing 10 most recent scans:'.format(scans['total']))
+        click.echo(u'# {:20} {:<15} {:<10} {:<15s}'.format('Scan ID', 'Status', 'Size', 'Timestamp'))
+        # click.echo('#' * 65)
+        for scan in scans['matches'][:10]:
+            click.echo(
+                u'{:31} {:<24} {:<10} {:<15s}'.format(
+                    click.style(scan['id'], fg='yellow'),
+                    click.style(scan['status'], fg='cyan'),
+                    scan['size'],
+                    scan['created']
+                )
+            )
+    else:
+        click.echo("You haven't yet launched any scans.")
+
+
 @scan.command(name='internet')
 @click.option('--quiet', help='Disable the printing of information to the screen.', default=False, is_flag=True)
 @click.argument('port', type=int)
@@ -58,12 +87,11 @@ def scan_internet(quiet, port, protocol):
 
                             if not quiet:
                                 click.echo('{0:<40} {1:<20} {2}'.format(
-                                        click.style(helpers.get_ip(banner), fg=COLORIZE_FIELDS['ip_str']),
-                                        click.style(str(banner['port']), fg=COLORIZE_FIELDS['port']),
-                                        ';'.join(banner['hostnames'])
-                                    )
+                                    click.style(helpers.get_ip(banner), fg=COLORIZE_FIELDS['ip_str']),
+                                    click.style(str(banner['port']), fg=COLORIZE_FIELDS['port']),
+                                    ';'.join(banner['hostnames']))
                                 )
-                    except shodan.APIError as e:
+                    except shodan.APIError:
                         # We stop waiting for results if the scan has been processed by the crawlers and
                         # there haven't been new results in a while
                         if done:
@@ -72,7 +100,7 @@ def scan_internet(quiet, port, protocol):
                         scan = api.scan_status(scan['id'])
                         if scan['status'] == 'DONE':
                             done = True
-                    except socket.timeout as e:
+                    except socket.timeout:
                         # We stop waiting for results if the scan has been processed by the crawlers and
                         # there haven't been new results in a while
                         if done:
@@ -177,7 +205,7 @@ def scan_submit(wait, filename, force, verbose, netblocks):
                                 done = True
                                 break
 
-                except shodan.APIError as e:
+                except shodan.APIError:
                     # If the connection timed out before the timeout, that means the streaming server
                     # that the user tried to reach is down. In that case, lets wait briefly and try
                     # to connect again!
@@ -195,7 +223,7 @@ def scan_submit(wait, filename, force, verbose, netblocks):
 
                     if verbose:
                         click.echo('# Scan status: {}'.format(scan['status']))
-                except socket.timeout as e:
+                except socket.timeout:
                     # If the connection timed out before the timeout, that means the streaming server
                     # that the user tried to reach is down. In that case, lets wait a second and try
                     # to connect again!

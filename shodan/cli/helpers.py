@@ -7,8 +7,15 @@ import gzip
 import itertools
 import os
 import sys
+from ipaddress import ip_network, ip_address
 
 from .settings import SHODAN_CONFIG_DIR
+
+try:
+    basestring            # Python 2
+except NameError:
+    basestring = (str, )  # Python 3
+
 
 def get_api_key():
     '''Returns the API key of the current logged-in user.'''
@@ -21,7 +28,8 @@ def get_api_key():
         raise click.ClickException('Please run "shodan init <api key>" before using this command')
 
     # Make sure it is a read-only file
-    os.chmod(keyfile, 0o600)
+    if not oct(os.stat(keyfile).st_mode).endswith("600"):
+        os.chmod(keyfile, 0o600)
 
     with open(keyfile, 'r') as fin:
         return fin.read().strip()
@@ -51,15 +59,31 @@ def get_banner_field(banner, flat_field):
         for field in fields:
             current_obj = current_obj[field]
         return current_obj
-    except:
+    except Exception:
         pass
 
     return None
 
 
+def filter_with_netmask(banner, netmask):
+    # filtering based on netmask is a more abstract concept than
+    # a mere check for a specific field and thus needs its own mechanism
+    # this will enable users to use the net:10.0.0.0/8 syntax they are used to
+    # to find specific networks from a big shodan download.
+    network = ip_network(netmask)
+    ip_field = get_banner_field(banner, 'ip')
+    if not ip_field:
+        return False
+    banner_ip_address = ip_address(ip_field)
+    return banner_ip_address in network
+
+
 def match_filters(banner, filters):
     for args in filters:
         flat_field, check = args.split(':', 1)
+        if flat_field == 'net':
+            return filter_with_netmask(banner, check)
+
         value = get_banner_field(banner, flat_field)
 
         # If the field doesn't exist on the banner then ignore the record

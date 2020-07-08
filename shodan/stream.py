@@ -21,7 +21,7 @@ class Stream:
 
         # The user doesn't want to use a timeout
         # If the timeout is specified as 0 then we also don't want to have a timeout
-        if ( timeout and timeout <= 0 ) or ( timeout == 0 ):
+        if (timeout and timeout <= 0) or (timeout == 0):
             timeout = None
 
         # If the user requested a timeout then we need to disable heartbeat messages
@@ -43,16 +43,16 @@ class Stream:
                 # not specific to Cloudflare.
                 if req.status_code != 524 or timeout >= 0:
                     break
-        except Exception as e:
+        except Exception:
             raise APIError('Unable to contact the Shodan Streaming API')
 
         if req.status_code != 200:
             try:
                 data = json.loads(req.text)
                 raise APIError(data['error'])
-            except APIError as e:
+            except APIError:
                 raise
-            except Exception as e:
+            except Exception:
                 pass
             raise APIError('Invalid API key or you do not have access to the Streaming API')
         if req.encoding is None:
@@ -78,9 +78,9 @@ class Stream:
         try:
             for line in self._iter_stream(stream, raw):
                 yield line
-        except requests.exceptions.ConnectionError as e:
+        except requests.exceptions.ConnectionError:
             raise APIError('Stream timed out')
-        except ssl.SSLError as e:
+        except ssl.SSLError:
             raise APIError('Stream timed out')
 
     def asn(self, asn, raw=False, timeout=None):
@@ -124,3 +124,24 @@ class Stream:
         for line in self._iter_stream(stream, raw):
             yield line
 
+    def tags(self, tags, raw=False, timeout=None):
+        """
+        A filtered version of the "banners" stream to only return banners that match the tags of interest.
+
+        :param tags: A list of tags to return banner data on.
+        :type tags: string[]
+        """
+        stream = self._create_stream('/shodan/tags/%s' % ','.join(tags), timeout=timeout)
+        for line in self._iter_stream(stream, raw):
+            yield line
+
+    def vulns(self, vulns, raw=False, timeout=None):
+        """
+        A filtered version of the "banners" stream to only return banners that match the vulnerabilities of interest.
+
+        :param vulns: A list of vulns to return banner data on.
+        :type vulns: string[]
+        """
+        stream = self._create_stream('/shodan/vulns/%s' % ','.join(vulns), timeout=timeout)
+        for line in self._iter_stream(stream, raw):
+            yield line

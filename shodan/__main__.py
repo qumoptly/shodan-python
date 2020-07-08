@@ -26,17 +26,12 @@ The following commands are currently supported:
 """
 
 import click
-import collections
 import csv
-import datetime
-import gzip
-import itertools
 import os
 import os.path
+import pkg_resources
 import shodan
 import shodan.helpers as helpers
-import socket
-import sys
 import threading
 import requests
 import time
@@ -55,8 +50,22 @@ from shodan.cli.host import HOST_PRINT
 from click_plugins import with_plugins
 from pkg_resources import iter_entry_points
 
+# Large subcommands are stored in separate modules
+from shodan.cli.alert import alert
+from shodan.cli.data import data
+from shodan.cli.organization import org
+from shodan.cli.scan import scan
+
+
 # Make "-h" work like "--help"
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
+CONVERTERS = {
+    'kml': KmlConverter,
+    'csv': CsvConverter,
+    'geo.json': GeoJsonConverter,
+    'images': ImagesConverter,
+    'xlsx': ExcelConverter,
+}
 
 # Define a basestring type if necessary for Python3 compatibility
 try:
@@ -73,11 +82,7 @@ def main():
     pass
 
 
-# Large subcommands are stored in separate modules
-from shodan.cli.alert import alert
-from shodan.cli.data import data
-from shodan.cli.organization import org
-from shodan.cli.scan import scan
+# Setup the large subcommands
 main.add_command(alert)
 main.add_command(data)
 main.add_command(org)
@@ -85,13 +90,23 @@ main.add_command(scan)
 
 
 @main.command()
+@click.option('--fields', help='List of properties to output.', default=None)
 @click.argument('input', metavar='<input file>')
-@click.argument('format', metavar='<output format>', type=click.Choice(['kml', 'csv', 'geo.json', 'images', 'xlsx']))
-def convert(input, format):
-    """Convert the given input data file into a different format.
+@click.argument('format', metavar='<output format>', type=click.Choice(CONVERTERS.keys()))
+def convert(fields, input, format):
+    """Convert the given input data file into a different format. The following file formats are supported:
+
+    kml, csv, geo.json, images, xlsx
 
     Example: shodan convert data.json.gz kml
     """
+    # Check that the converter allows a custom list of fields
+    converter_class = CONVERTERS.get(format)
+    if fields:
+        if not hasattr(converter_class, 'fields'):
+            raise click.ClickException('File format doesnt support custom list of fields')
+        converter_class.fields = [item.strip() for item in fields.split(',')]  # Use the custom fields the user specified
+    
     # Get the basename for the input file
     basename = input.replace('.json.gz', '').replace('.json', '')
 
@@ -107,13 +122,7 @@ def convert(input, format):
     progress_bar_thread.start()
 
     # Initialize the file converter
-    converter = {
-        'kml': KmlConverter,
-        'csv': CsvConverter,
-        'geo.json': GeoJsonConverter,
-        'images': ImagesConverter,
-        'xlsx': ExcelConverter,
-    }.get(format)(fout)
+    converter = converter_class(fout)
 
     converter.process([input])
 
@@ -124,6 +133,73 @@ def convert(input, format):
         click.echo(click.style('\rSuccessfully extracted images to directory: {}'.format(converter.dirname), fg='green'))
     else:
         click.echo(click.style('\rSuccessfully created new file: {}'.format(filename), fg='green'))
+
+
+@main.command(name='domain')
+@click.argument('domain', metavar='<domain>')
+@click.option('--details', '-D', help='Lookup host information for any IPs in the domain results', default=False, is_flag=True)
+@click.option('--save', '-S', help='Save the information in the a file named after the domain (append if file exists).', default=False, is_flag=True)
+@click.option('--history', '-H', help='Include historical DNS data in the results', default=False, is_flag=True)
+@click.option('--type', '-T', help='Only returns DNS records of the provided type', default=None)
+def domain_info(domain, details, save, history, type):
+    """View all available information for a domain"""
+    key = get_api_key()
+    api = shodan.Shodan(key)
+
+    try:
+        info = api.dns.domain_info(domain, history=history, type=type)
+    except shodan.APIError as e:
+        raise click.ClickException(e.value)
+
+    # Grab the host information for any IP records that were returned
+    hosts = {}
+    if details:
+        ips = [record['value'] for record in info['data'] if record['type'] in ['A', 'AAAA']]
+        ips = set(ips)
+
+        fout = None
+        if save:
+            filename = u'{}-hosts.json.gz'.format(domain)
+            fout = helpers.open_file(filename)
+
+        for ip in ips:
+            try:
+                hosts[ip] = api.host(ip)
+
+                # Store the banners if requested
+                if fout:
+                    for banner in hosts[ip]['data']:
+                        if 'placeholder' not in banner:
+                            helpers.write_banner(fout, banner)
+            except shodan.APIError:
+                pass  # Ignore any API lookup errors as this isn't critical information
+    
+    # Save the DNS data
+    if save:
+        filename = u'{}.json.gz'.format(domain)
+        fout = helpers.open_file(filename)
+
+        for record in info['data']:
+            helpers.write_banner(fout, record)
+
+    click.secho(info['domain'].upper(), fg='green')
+
+    click.echo('')
+    for record in info['data']:
+        click.echo(
+            u'{:32}  {:14}  {}'.format(
+                click.style(record['subdomain'], fg='cyan'),
+                click.style(record['type'], fg='yellow'),
+                record['value']
+            ),
+            nl=False,
+        )
+
+        if record['value'] in hosts:
+            host = hosts[record['value']]
+            click.secho(u' Ports: {}'.format(', '.join([str(port) for port in sorted(host['ports'])])), fg='blue', nl=False)
+        
+        click.echo('')
 
 
 @main.command()
@@ -154,6 +230,7 @@ def init(key):
 
     os.chmod(keyfile, 0o600)
 
+
 @main.command()
 @click.argument('query', metavar='<search query>', nargs=-1)
 def count(query):
@@ -179,9 +256,10 @@ def count(query):
 
 @main.command()
 @click.option('--limit', help='The number of results you want to download. -1 to download all the data possible.', default=1000, type=int)
+@click.option('--skip', help='The number of results to skip when starting the download.', default=0, type=int)
 @click.argument('filename', metavar='<filename>')
 @click.argument('query', metavar='<search query>', nargs=-1)
-def download(limit, filename, query):
+def download(limit, skip, filename, query):
     """Download search results and save them in a compressed JSON file."""
     key = get_api_key()
 
@@ -206,7 +284,7 @@ def download(limit, filename, query):
     try:
         total = api.count(query)['total']
         info = api.info()
-    except:
+    except Exception:
         raise click.ClickException('The Shodan API is unresponsive at the moment, please try again later.')
 
     # Print some summary information about the download request
@@ -221,11 +299,15 @@ def download(limit, filename, query):
     # A limit of -1 means that we should download all the data
     if limit <= 0:
         limit = total
+    
+        # Adjust the total number of results we should expect to download if the user is skipping results
+        if skip > 0:
+            limit -= skip
 
     with helpers.open_file(filename, 'w') as fout:
         count = 0
         try:
-            cursor = api.search_cursor(query, minify=False)
+            cursor = api.search_cursor(query, minify=False, skip=skip)
             with click.progressbar(cursor, length=limit) as bar:
                 for banner in bar:
                     helpers.write_banner(fout, banner)
@@ -233,7 +315,7 @@ def download(limit, filename, query):
 
                     if count >= limit:
                         break
-        except:
+        except Exception:
             pass
 
         # Let the user know we're done
@@ -278,7 +360,6 @@ def host(format, history, filename, save, ip):
         raise click.ClickException(e.value)
 
 
-
 @main.command()
 def info():
     """Shows general information about your account"""
@@ -311,7 +392,6 @@ def parse(color, fields, filters, filename, separator, filenames):
 
     has_filters = len(filters) > 0
 
-
     # Setup the output file handle
     fout = None
     if filename:
@@ -336,7 +416,7 @@ def parse(color, fields, filters, filename, separator, filenames):
             helpers.write_banner(fout, banner)
 
         # Loop over all the fields and print the banner as a row
-        for field in fields:
+        for i, field in enumerate(fields):
             tmp = u''
             value = get_banner_field(banner, field)
             if value:
@@ -354,19 +434,26 @@ def parse(color, fields, filters, filename, separator, filenames):
                 if color:
                     tmp = click.style(tmp, fg=COLORIZE_FIELDS.get(field, 'white'))
 
-                # Add the field information to the row
-                row += tmp
-            row += separator
+            # Add the field information to the row
+            if i > 0:
+                row += separator
+            row += tmp
 
         click.echo(row)
 
 
 @main.command()
-def myip():
+@click.option('--ipv6', '-6', is_flag=True, default=False, help='Try to use IPv6 instead of IPv4')
+def myip(ipv6):
     """Print your external IP address"""
     key = get_api_key()
 
     api = shodan.Shodan(key)
+
+    # Use the IPv6-enabled domain if requested
+    if ipv6:
+        api.base_url = 'https://apiv6.shodan.io'
+    
     try:
         click.echo(api.tools.myip())
     except shodan.APIError as e:
@@ -522,7 +609,7 @@ def stats(limit, facets, filename, query):
                 if len(values) > counter:
                     has_items = True
                     row[pos] = values[counter]['value']
-                    row[pos+1] = values[counter]['count']
+                    row[pos + 1] = values[counter]['count']
 
                 pos += 2
 
@@ -547,8 +634,10 @@ def stats(limit, facets, filename, query):
 @click.option('--countries', help='A comma-separated list of countries to grab data on.', default=None, type=str)
 @click.option('--asn', help='A comma-separated list of ASNs to grab data on.', default=None, type=str)
 @click.option('--alert', help='The network alert ID or "all" to subscribe to all network alerts on your account.', default=None, type=str)
+@click.option('--tags', help='A comma-separated list of tags to grab data on.', default=None, type=str)
 @click.option('--compresslevel', help='The gzip compression level (0-9; 0 = no compression, 9 = most compression', default=9, type=int)
-def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, streamer, countries,  asn, alert, compresslevel):
+@click.option('--vulns', help='A comma-separated list of vulnerabilities to grab data on.', default=None, type=str)
+def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, streamer, countries, asn, alert, tags, compresslevel, vulns):
     """Stream data in real-time."""
     # Setup the Shodan API
     key = get_api_key()
@@ -574,9 +663,13 @@ def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, stre
         stream_type.append('asn')
     if alert:
         stream_type.append('alert')
+    if tags:
+        stream_type.append('tags')
+    if vulns:
+        stream_type.append('vulns')
 
     if len(stream_type) > 1:
-        raise click.ClickException('Please use --ports, --countries OR --asn. You cant subscribe to multiple filtered streams at once.')
+        raise click.ClickException('Please use --ports, --countries, --tags, --vulns OR --asn. You cant subscribe to multiple filtered streams at once.')
 
     stream_args = None
 
@@ -584,7 +677,7 @@ def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, stre
     if ports:
         try:
             stream_args = [int(item.strip()) for item in ports.split(',')]
-        except:
+        except ValueError:
             raise click.ClickException('Invalid list of ports')
 
     if alert:
@@ -597,6 +690,12 @@ def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, stre
 
     if countries:
         stream_args = countries.split(',')
+    
+    if tags:
+        stream_args = tags.split(',')
+    
+    if vulns:
+        stream_args = vulns.split(',')
 
     # Flatten the list of stream types
     # Possible values are:
@@ -617,6 +716,8 @@ def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, stre
             'asn': api.stream.asn(args, timeout=timeout),
             'countries': api.stream.countries(args, timeout=timeout),
             'ports': api.stream.ports(args, timeout=timeout),
+            'tags': api.stream.tags(args, timeout=timeout),
+            'vulns': api.stream.vulns(args, timeout=timeout),
         }.get(name, 'all')
 
     stream = _create_stream(stream_type, stream_args, timeout=timeout)
@@ -644,9 +745,9 @@ def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, stre
                 if datadir:
                     cur_time = timestr()
                     if cur_time != last_time:
-                            last_time = cur_time
-                            fout.close()
-                            fout = open_streaming_file(datadir, last_time)
+                        last_time = cur_time
+                        fout.close()
+                        fout = open_streaming_file(datadir, last_time)
                     helpers.write_banner(fout, banner)
 
                 # Print the banner information to stdout
@@ -683,7 +784,7 @@ def stream(color, fields, separator, limit, datadir, ports, quiet, timeout, stre
             quit = True
         except shodan.APIError as e:
             raise click.ClickException(e.value)
-        except:
+        except Exception:
             # For other errors lets just wait a bit and try to reconnect again
             time.sleep(1)
 
@@ -709,7 +810,7 @@ def honeyscore(ip):
             click.echo(click.style('Not a honeypot', fg='green'))
 
         click.echo('Score: {}'.format(score))
-    except:
+    except Exception:
         raise click.ClickException('Unable to calculate honeyscore')
 
 
@@ -727,6 +828,13 @@ def radar():
         raise click.ClickException(e.value)
     except Exception as e:
         raise click.ClickException(u'{}'.format(e))
+
+
+@main.command()
+def version():
+    """Print version of this tool."""
+    print(pkg_resources.get_distribution("shodan").version)
+
 
 if __name__ == '__main__':
     main()

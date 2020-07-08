@@ -19,7 +19,7 @@ def create_facet_string(facets):
         if isinstance(facet, basestring):
             facet_str += facet
         else:
-            facet_str += '%s:%s'  % (facet[0], facet[1])
+            facet_str += '{}:{}'.format(facet[0], facet[1])
         facet_str += ','
     return facet_str[:-1]
 
@@ -58,7 +58,7 @@ def api_request(key, function, params=None, data=None, base_url='https://api.sho
 
             # Exit out of the loop
             break
-        except:
+        except Exception:
             error = True
             tries += 1
 
@@ -69,14 +69,14 @@ def api_request(key, function, params=None, data=None, base_url='https://api.sho
     if data.status_code == 401:
         try:
             raise APIError(data.json()['error'])
-        except:
+        except (ValueError, KeyError):
             pass
         raise APIError('Invalid API key')
 
     # Parse the text into JSON
     try:
         data = data.json()
-    except:
+    except Exception:
         raise APIError('Unable to parse JSON response')
 
     # Raise an exception if an error occurred
@@ -89,7 +89,7 @@ def api_request(key, function, params=None, data=None, base_url='https://api.sho
 
 def iterate_files(files, fast=False):
     """Loop over all the records of the provided Shodan output file(s)."""
-    from json import loads
+    loads = json.loads
     if fast:
         # Try to use ujson for parsing JSON if it's available and the user requested faster throughput
         # It's significantly faster at encoding/ decoding JSON but it doesn't support as
@@ -98,7 +98,7 @@ def iterate_files(files, fast=False):
         # pylint: disable=E0401
         try:
             from ujson import loads
-        except:
+        except Exception:
             pass
 
     if isinstance(files, basestring):
@@ -113,11 +113,13 @@ def iterate_files(files, fast=False):
 
         for line in fin:
             # Ensure the line has been decoded into a string to prevent errors w/ Python3
-            line = line.decode('utf-8')
+            if not isinstance(line, basestring):
+                line = line.decode('utf-8')
 
             # Convert the JSON into a native Python object
             banner = loads(line)
             yield banner
+
 
 def get_screenshot(banner):
     if 'opts' in banner and 'screenshot' in banner['opts']:
@@ -159,14 +161,13 @@ def humanize_bytes(bytes, precision=1):
     >>> humanize_bytes(1024*1234*1111,1)
     '1.3 GB'
     """
-
     if bytes == 1:
         return '1 byte'
     if bytes < 1024:
         return '%.*f %s' % (precision, bytes, "bytes")
 
     suffixes = ['KB', 'MB', 'GB', 'TB', 'PB']
-    multiple = 1024.0    #.0 force float on python 2
+    multiple = 1024.0  # .0 to force float on python 2
     for suffix in suffixes:
         bytes /= multiple
         if bytes < multiple:

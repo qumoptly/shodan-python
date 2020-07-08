@@ -1,6 +1,107 @@
 CHANGELOG
 =========
 
+1.23.0
+------
+* Add new CLI command: shodan alert domain
+
+1.22.1
+------
+* Fix bug when converting data file to CSV using Python3
+
+1.22.0
+------
+* Add support for new vulnerability streaming endpoints
+
+1.21.3
+------
+* Fix geo.json file converter
+
+1.21.2
+------
+* Add support for paging through the domain information
+
+1.21.1
+------
+* Add ``history`` and ``type`` parameters to ``Shodan.dns.domain_info()`` method and CLI command
+
+1.21.0
+------
+* New API methods ``api.search_facets()`` and ``api.search_filters()`` to get a list of available facets and filters.
+
+1.20.0
+------
+* New option "-S" for **shodan domain** to save results from the lookup
+* New option "-D" for **shodan domain** to lookup open ports for IPs in the results
+
+1.19.0
+------
+* New method to edit the list of IPs for an existing network alert
+
+1.18.0
+------
+* Add library methods for the new Notifications API
+
+1.17.0
+------
+* Fix bug that caused unicode error when printing domain information (#106)
+* Add flag to let users get their IPv6 address **shodan myip -6**(#35)
+
+1.16.0
+------
+* Ability to specify list of fields to include when converting to CSV/ Excel (#107)
+* Filter the Shodan Firehose based on tags in the banner
+
+1.15.0
+------
+* New option "--skip" for download command to help users resume a download
+
+1.14.0
+------
+* New command **shodan version** (#104).
+* Only change api_key file permissions if needed (#103)
+
+1.13.0
+------
+* New command **shodan domain** to lookup a domain in Shodan's DNS database
+* Override environment configured settings if explicit proxy settings are supplied (@cudeso)
+
+1.12.1
+------
+* Fix Excel file conversion that resulted in empty .xlsx files
+
+1.12.0
+------
+* Add new methods to ignore/ unignore trigger notifications
+
+1.11.1
+------
+* Allow a single network alert to monitor multiple IP ranges (#93)
+
+1.11.0
+------
+* New command **shodan scan list** to list recently launched scans
+* New command **shodan alert triggers** to list the available notification triggers
+* New command **shodan alert enable** to enable a notification trigger
+* New command **shodan alert disable** to disable a notification trigger
+* New command **shodan alert info** to show details of a specific alert
+* Include timestamp, vulns and tags in CSV converter (#85)
+* Fixed bug that caused an exception when parsing uncompressed data files in Python3
+* Code quality improvements
+* Thank you for contributions from @wagner-certat, @cclauss, @opt9, @voldmar and Antoine Neuenschwander
+
+1.10.4
+------
+* Fix a bug when showing old banner records that don't have the "transport" property
+* Code quality improvements (bare excepts)
+
+1.10.3
+------
+* Change bare 'except:' statements to 'except Exception:' or more specific ones
+* remove unused imports
+* Convert line endings of `shodan/client.py` and `tests/test_shodan.py` to unix
+* List file types in **shodan convert** (#80)
+
 1.10.2
 ------
 * Fix **shodan stats** formatting exception when faceting on **port**

@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 '''
 F-Secure Virus World Map console edition
 
@@ -30,8 +29,7 @@ MAPS = {
         'coords': [90.0, -180.0, -90.0, 180.0],
 
         # PyLint freaks out about the world map backslashes so ignore those warnings
-        # pylint: disable=W1401
-        'data': '''
+        'data': r'''
                . _..::__:  ,-"-"._       |7       ,     _,.__             
        _.___ _ _<_>`!(._`.`-.    /        _._     `_ ,_/  '  '-._.---.-.__
      .{     " " `-==,',._\{  \  / {)     / _ ">_,-' `                mt-2_
@@ -108,14 +106,14 @@ class AsciiMap(object):
         TODO: filter out stuff that doesn't fit
         TODO: make it possible to use "zoomed" maps
         """
-        width = (self.corners[3]-self.corners[1])
-        height = (self.corners[2]-self.corners[0])
+        width = (self.corners[3] - self.corners[1])
+        height = (self.corners[2] - self.corners[0])
 
         # change to 0-180, 0-360
-        abs_lat = -lat+90
-        abs_lon = lon+180
-        x = (abs_lon/360.0)*width + self.corners[1]
-        y = (abs_lat/180.0)*height + self.corners[0]
+        abs_lat = -lat + 90
+        abs_lon = lon + 180
+        x = (abs_lon / 360.0) * width + self.corners[1]
+        y = (abs_lat / 180.0) * height + self.corners[0]
         return int(x), int(y)
 
     def set_data(self, data):
@@ -132,7 +130,7 @@ class AsciiMap(object):
                 # Not all cities can be encoded in ASCII so ignore any errors
                 try:
                     desc += ' {}'.format(banner['location']['city'])
-                except:
+                except Exception:
                     pass
             
             if 'tags' in banner and banner['tags']:
@@ -155,12 +153,12 @@ class AsciiMap(object):
         self.window.addstr(0, 0, self.map)
 
         # FIXME: position to be defined in map config?
-        row = self.corners[2]-6
+        row = self.corners[2] - 6
         items_to_show = 5
         for lat, lon, char, desc, attrs, color in self.data:
             # to make this work almost everywhere. see http://docs.python.org/2/library/curses.html
             if desc:
-                desc = desc.encode(self.encoding, 'ignore')
+                desc = desc.encode(self.encoding, 'ignore').decode()
             if items_to_show <= 0:
                 break
             char_x, char_y = self.latlon_to_coords(lat, lon)
@@ -177,7 +175,7 @@ class AsciiMap(object):
                     self.window.addstr(row, 1, det_show, attrs)
                     row += 1
                     items_to_show -= 1
-                except StandardError:
+                except Exception:
                     # FIXME: check window size before addstr()
                     break
         self.window.overwrite(target)
@@ -256,6 +254,7 @@ def main(argv=None):
 
     api = Shodan(get_api_key())
     return launch_map(api)
+
 
 if __name__ == '__main__':
     import sys

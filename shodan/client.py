@@ -26,7 +26,7 @@ from .stream import Stream
 # pylint: disable=E1101
 try:
     requests.packages.urllib3.disable_warnings()
-except:
+except Exception:
     pass
 
 # Define a basestring type if necessary for Python3 compatibility
@@ -63,6 +63,89 @@ class Shodan:
             :returns: A list of objects where each object contains a 'name', 'size', 'timestamp' and 'url'
             """
             return self.parent._request('/shodan/data/{}'.format(dataset), {})
+
+    class Dns:
+
+        def __init__(self, parent):
+            self.parent = parent
+
+        def domain_info(self, domain, history=False, type=None, page=1):
+            """Grab the DNS information for a domain.
+            """
+            args = {
+                'page': page,
+            }
+            if history:
+                args['history'] = history
+            if type:
+                args['type'] = type
+            return self.parent._request('/dns/domain/{}'.format(domain), args)
+
+    class Notifier:
+
+        def __init__(self, parent):
+            self.parent = parent
+        
+        def create(self, provider, args, description=None):
+            """Get the settings for the specified notifier that a user has configured.
+
+            :param provider: Provider name
+            :type provider: str
+            :param args: Provider arguments
+            :type args: dict
+            :param description: Human-friendly description of the notifier
+            :type description: str
+            :returns: dict -- fields are 'success' and 'id' of the notifier
+            """
+            args['provider'] = provider
+
+            if description:
+                args['description'] = description
+            
+            return self.parent._request('/notifier', args, method='post')
+        
+        def edit(self, nid, args):
+            """Get the settings for the specified notifier that a user has configured.
+
+            :param nid: Notifier ID
+            :type nid: str
+            :param args: Provider arguments
+            :type args: dict
+            :returns: dict -- fields are 'success' and 'id' of the notifier
+            """
+            return self.parent._request('/notifier/{}'.format(nid), args, method='put')
+        
+        def get(self, nid):
+            """Get the settings for the specified notifier that a user has configured.
+
+            :param nid: Notifier ID
+            :type nid: str
+            :returns: dict -- object describing the notifier settings
+            """
+            return self.parent._request('/notifier/{}'.format(nid), {})
+
+        def list_notifiers(self):
+            """Returns a list of notifiers that the user has added.
+
+            :returns: A list of notifierse that are available on the account
+            """
+            return self.parent._request('/notifier', {})
+
+        def list_providers(self):
+            """Returns a list of supported notification providers.
+
+            :returns: A list of providers where each object describes a provider
+            """
+            return self.parent._request('/notifier/provider', {})
+        
+        def remove(self, nid):
+            """Delete the provided notifier.
+
+            :param nid: Notifier ID
+            :type nid: str
+            :returns: dict -- 'success' set to True if action succeeded
+            """
+            return self.parent._request('/notifier/{}'.format(nid), {}, method='delete')
 
     class Tools:
 
@@ -176,20 +259,23 @@ class Shodan:
         :param key: The Shodan API key.
         :type key: str
         :param proxies: A proxies array for the requests library, e.g. {'https': 'your proxy'}
-        :type key: dict
+        :type proxies: dict
         """
         self.api_key = key
         self.base_url = 'https://api.shodan.io'
         self.base_exploits_url = 'https://exploits.shodan.io'
         self.data = self.Data(self)
+        self.dns = self.Dns(self)
         self.exploits = self.Exploits(self)
         self.labs = self.Labs(self)
+        self.notifier = self.Notifier(self)
         self.org = self.Organization(self)
         self.tools = self.Tools(self)
         self.stream = Stream(key, proxies=proxies)
         self._session = requests.Session()
         if proxies:
             self._session.proxies.update(proxies)
+            self._session.trust_env = False
 
     def _request(self, function, params, service='shodan', method='get'):
         """General-purpose function to create web requests to SHODAN.
@@ -222,7 +308,7 @@ class Shodan:
                 data = self._session.delete(base_url + function, params=params)
             else:
                 data = self._session.get(base_url + function, params=params)
-        except:
+        except Exception:
             raise APIError('Unable to connect to Shodan')
 
         # Check that the API key wasn't rejected
@@ -246,7 +332,7 @@ class Shodan:
         # Parse the text into JSON
         try:
             data = data.json()
-        except:
+        except ValueError:
             raise APIError('Unable to parse JSON response')
 
         # Raise an exception if an error occurred
@@ -347,6 +433,16 @@ class Shodan:
 
         return self._request('/shodan/scan', params, method='post')
 
+    def scans(self, page=1):
+        """Get a list of scans submitted
+
+        :param page: Page through the list of scans 100 results at a time
+        :type page: int
+        """
+        return self._request('/shodan/scans', {
+            'page': page,
+        })
+
     def scan_internet(self, port, protocol):
         """Scan a network using Shodan
 
@@ -408,7 +504,7 @@ class Shodan:
 
         return self._request('/shodan/host/search', args)
 
-    def search_cursor(self, query, minify=True, retries=5):
+    def search_cursor(self, query, minify=True, retries=5, skip=0):
         """Search the SHODAN database.
 
         This method returns an iterator that can directly be in a loop. Use it when you want to loop over
@@ -421,33 +517,58 @@ class Shodan:
         :param minify: (optional) Whether to minify the banner and only return the important data
         :type minify: bool
         :param retries: (optional) How often to retry the search in case it times out
-        :type minify: int
+        :type retries: int
+        :param skip: (optional) Number of results to skip
+        :type skip: int
 
         :returns: A search cursor that can be used as an iterator/ generator.
         """
         page = 1
         tries = 0
+
+        # Placeholder results object to make the while loop below easier
         results = {
-            'matches': [],
+            'matches': [True],
             'total': None,
         }
-        while page == 1 or results['matches']:
+
+        # Convert the number of skipped records into a page number
+        if skip > 0:
+            # Each page returns 100 results so find the nearest page that we want
+            # the cursor to skip to.
+            page += int(skip / 100)
+
+        while results['matches']:
             try:
                 results = self.search(query, minify=minify, page=page)
                 for banner in results['matches']:
                     try:
                         yield banner
                     except GeneratorExit:
-                        return # exit out of the function
+                        return  # exit out of the function
                 page += 1
                 tries = 0
-            except:
+            except Exception:
                 # We've retried several times but it keeps failing, so lets error out
                 if tries >= retries:
-                    break
+                    raise APIError('Retry limit reached ({:d})'.format(retries))
 
                 tries += 1
-                time.sleep(1.0) # wait 1 second if the search errored out for some reason
+                time.sleep(1.0)  # wait 1 second if the search errored out for some reason
+
+    def search_facets(self):
+        """Returns a list of search facets that can be used to get aggregate information about a search query.
+
+        :returns: A list of strings where each is a facet name
+        """
+        return self._request('/shodan/host/search/facets', {})
+
+    def search_filters(self):
+        """Returns a list of search filters that are available.
+
+        :returns: A list of strings where each is a filter name
+        """
+        return self._request('/shodan/host/search/filters', {})
 
     def search_tokens(self, query):
         """Returns information about the search query itself (filters used etc.)
@@ -507,8 +628,8 @@ class Shodan:
     def queries_tags(self, size=10):
         """Search the directory of saved search queries in Shodan.
 
-        :param query: The number of tags to return
-        :type page: int
+        :param size: The number of tags to return
+        :type size: int
 
         :returns: A list of tags.
         """
@@ -518,12 +639,14 @@ class Shodan:
         return self._request('/shodan/query/tags', args)
 
     def create_alert(self, name, ip, expires=0):
-        """Search the directory of saved search queries in Shodan.
+        """Create a network alert/ private firehose for the specified IP range(s)
 
-        :param query: The number of tags to return
-        :type page: int
+        :param name: Name of the alert
+        :type name: str
+        :param ip: Network range(s) to monitor
+        :type ip: str OR list of str
 
-        :returns: A list of tags.
+        :returns: A dict describing the alert
         """
         data = {
             'name': name,
@@ -538,6 +661,27 @@ class Shodan:
 
         return response
 
+    def edit_alert(self, aid, ip):
+        """Edit the IPs that should be monitored by the alert.
+
+        :param aid: Alert ID
+        :type name: str
+        :param ip: Network range(s) to monitor
+        :type ip: str OR list of str
+
+        :returns: A dict describing the alert
+        """
+        data = {
+            'filters': {
+                'ip': ip,
+            },
+        }
+
+        response = api_request(self.api_key, '/shodan/alert/{}'.format(aid), data=data, params={}, method='post',
+                               proxies=self._session.proxies)
+
+        return response
+
     def alerts(self, aid=None, include_expired=True):
         """List all of the active alerts that the user created."""
         if aid:
@@ -547,8 +691,7 @@ class Shodan:
 
         response = api_request(self.api_key, func, params={
             'include_expired': include_expired,
-            },
-            proxies=self._session.proxies)
+        }, proxies=self._session.proxies)
 
         return response
 
@@ -561,3 +704,33 @@ class Shodan:
 
         return response
 
+    def alert_triggers(self):
+        """Return a list of available triggers that can be enabled for alerts.
+
+        :returns: A list of triggers
+        """
+        return self._request('/shodan/alert/triggers', {})
+
+    def enable_alert_trigger(self, aid, trigger):
+        """Enable the given trigger on the alert."""
+        return self._request('/shodan/alert/{}/trigger/{}'.format(aid, trigger), {}, method='put')
+
+    def disable_alert_trigger(self, aid, trigger):
+        """Disable the given trigger on the alert."""
+        return self._request('/shodan/alert/{}/trigger/{}'.format(aid, trigger), {}, method='delete')
+
+    def ignore_alert_trigger_notification(self, aid, trigger, ip, port):
+        """Ignore trigger notifications for the provided IP and port."""
+        return self._request('/shodan/alert/{}/trigger/{}/ignore/{}:{}'.format(aid, trigger, ip, port), {}, method='put')
+
+    def unignore_alert_trigger_notification(self, aid, trigger, ip, port):
+        """Re-enable trigger notifications for the provided IP and port"""
+        return self._request('/shodan/alert/{}/trigger/{}/ignore/{}:{}'.format(aid, trigger, ip, port), {}, method='delete')
+    
+    def add_alert_notifier(self, aid, nid):
+        """Enable the given notifier for an alert that has triggers enabled."""
+        return self._request('/shodan/alert/{}/notifier/{}'.format(aid, nid), {}, method='put')
+    
+    def remove_alert_notifier(self, aid, nid):
+        """Remove the given notifier for an alert that has triggers enabled."""
+        return self._request('/shodan/alert/{}/notifier/{}'.format(aid, nid), {}, method='delete')
